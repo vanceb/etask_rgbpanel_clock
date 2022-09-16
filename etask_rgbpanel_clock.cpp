@@ -5,10 +5,11 @@
 #define COLOR_VFD       225
 #define COLOR_RED       84
 #define DISPLAY_COLOR   84     // Define a singe colour from the color wheel for the display
-//#define SHOW_UPTIME 1
-//#define SHOW_COLOR  1
-#define SHOW_DAY 1
-#define SECONDS_BAR 1
+//#define SHOW_UPTIME   1
+//#define SHOW_COLOR    1
+#define SHOW_DAY        1
+#define SECONDS_BAR     1
+#define LOOP_MS         40      // 25Hz
 
 #include <etask_rgbpanel_clock.h>
 #include <Fonts/FreeMonoBold12pt7b.h>
@@ -22,16 +23,26 @@ PROGMEM static char days[7][10] = {"Sunday", "Monday", "Tuesday", "Wednesday", "
 // Input a value 0 to 255 to get a color value.
 // The colours are a transition r - g - b - back to r.
 // From: https://gist.github.com/davidegironi/3144efdc6d67e5df55438cc3cba613c8
-uint16_t colorWheel(uint8_t pos) {
+uint16_t colorWheel(uint8_t pos, uint8_t dim = 255) {
+
+    dim = dim < 1 ? 1 : dim;
   if(pos < 85) {
-    return dma_display->color565(pos * 3, 255 - pos * 3, 0);
+    return dma_display->color565((pos * 3 * dim) / 255, (255 - pos * 3) * dim / 255, 0);
   } else if(pos < 170) {
     pos -= 85;
-    return dma_display->color565(255 - pos * 3, 0, pos * 3);
+    return dma_display->color565((255 - pos * 3) * dim / 255, 0, (pos * 3 * dim) / 255);
   } else {
     pos -= 170;
-    return dma_display->color565(0, pos * 3, 255 - pos * 3);
+    return dma_display->color565(0, (pos * 3 * dim) / 255, (255 - pos * 3) * dim / 255);
   }
+}
+
+/* Gets a time value based on the real-time, not time since start */
+int64_t getTimeMS() {
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (int16_t) (tv.tv_usec / 1000LL);
+	return (tv.tv_sec * 1000LL + (tv.tv_usec / 1000LL));
 }
 
 void etask_rgbpanel_clock(void *parameters)
@@ -65,13 +76,15 @@ void etask_rgbpanel_clock(void *parameters)
     // Display Setup
     dma_display = new MatrixPanel_I2S_DMA(mxconfig);
     dma_display->begin();
-    dma_display->setBrightness8(10); // 0-255
+    dma_display->setBrightness8(128); // 0-255
     dma_display->clearScreen();
     dma_display->flipDMABuffer();
 
     /* Run forever - Required for FreeRTOS task */
     struct tm timeinfo;
     unsigned long start = 0;
+    unsigned long end   = 0;
+    unsigned long looptime;
     unsigned long loopcounter = 0;
     long dly = 0;
     uint16_t color = 0xF800;
@@ -86,6 +99,7 @@ void etask_rgbpanel_clock(void *parameters)
         // Valid only if year > 2000. 
         // You can get from timeinfo : tm_year, tm_mon, tm_mday, tm_hour, tm_min, tm_sec
         if (timeinfo.tm_year > 100 )
+//        if (1)
         {
             /*
             //dma_display->setTextSize(2);     // size 1 == 8 pixels high
@@ -105,22 +119,31 @@ void etask_rgbpanel_clock(void *parameters)
                 ((timeinfo.tm_sec  & 0xF8))
             );
 */
+
+            /* Flashing colon */
+
+//            uint8_t sawtooth = start % 2000 < 1000 ? (start % 2000) / 4 : (2000 - (start % 2000)) / 4;
+#ifndef DISPLAY_COLOR
+            color = colorWheel(loopcounter%256);
+#else
+            color = colorWheel(DISPLAY_COLOR);
+#endif
+            dma_display->setFont(&FreeMonoBold12pt7b);
+            dma_display->setTextColor(color);
+            if ((timeinfo.tm_sec % 2) == 0) {
+                dma_display->setCursor(26, 16);
+                dma_display->print(":");
+            }
+
+
 #ifndef DISPLAY_COLOR
             color = colorWheel(loopcounter%256);
 #else
             color = colorWheel(DISPLAY_COLOR);
 #endif
             dma_display->setTextColor(color);
-#ifdef SECONDS_BAR
-            /* Seconds Bar */
-            dma_display->drawRect(2, 19, timeinfo.tm_sec+1, 2, color);
-            for (int i = 0; i <= 13; i++)
-                dma_display->drawPixel(2+i*5, 20, color);
-            for (int i=0; i<=5; i++)
-                dma_display->drawPixel(2+i*15, 21, color);
-#endif
+
             /* Hours and Minutes */
-            dma_display->setFont(&FreeMonoBold12pt7b);
             dma_display->setTextWrap(false); // Don't wrap at end of line - will do ourselves
             dma_display->setCursor(2, 16);
             dma_display->print(timeinfo.tm_hour / 10);
@@ -130,13 +153,26 @@ void etask_rgbpanel_clock(void *parameters)
             dma_display->print(timeinfo.tm_min / 10);
             dma_display->setCursor(48, 16);
             dma_display->print(timeinfo.tm_min % 10);
-            /* Flashing colon */
-            if ((loopcounter % 10) < 6) {
-                dma_display->setCursor(26, 16);
-                dma_display->print(":");
-            }
-            /* Uptime */
+            dma_display->setTextColor(color);
+
+#ifdef SECONDS_BAR
+            /* Seconds Bar */
+            dma_display->drawRect(2, 19, timeinfo.tm_sec+1, 2, color);
+            for (int i = 0; i <= 13; i++)
+                dma_display->drawPixel(2+i*5, 20, color);
+            for (int i=0; i<=5; i++)
+                dma_display->drawPixel(2+i*15, 21, color);
+#endif
+#ifdef SHOW_DAY
+            dma_display->setFont();
+            dma_display->setTextSize(1);     // size 1 == 8 pixels high
+            uint8_t txt_len = 6 * strlen(days[timeinfo.tm_wday]);
+            uint8_t start_x = (dma_display->width() - txt_len) < 0 ? 0 : (dma_display->width() - txt_len) / 2;
+            dma_display->setCursor(start_x, 23);
+            dma_display->print(days[timeinfo.tm_wday]);
+#endif
 #ifdef SHOW_UPTIME
+            /* Uptime */
             dma_display->setFont();
             dma_display->setTextSize(1);     // size 1 == 8 pixels high
             dma_display->setCursor(2, 22);
@@ -164,14 +200,6 @@ void etask_rgbpanel_clock(void *parameters)
             dma_display->setCursor(24, 22);
             dma_display->printf("%03d", loopcounter % 256);
 #endif
-#ifdef SHOW_DAY
-            dma_display->setFont();
-            dma_display->setTextSize(1);     // size 1 == 8 pixels high
-            uint8_t txt_len = 6 * strlen(days[timeinfo.tm_wday]);
-            uint8_t start_x = (dma_display->width() - txt_len) < 0 ? 0 : (dma_display->width() - txt_len) / 2;
-            dma_display->setCursor(start_x, 23);
-            dma_display->print(days[timeinfo.tm_wday]);
-#endif
         } else {
             dma_display->setTextSize(1);     // size 1 == 8 pixels high
             dma_display->setTextWrap(false); // Don't wrap at end of line - will do ourselves
@@ -182,7 +210,22 @@ void etask_rgbpanel_clock(void *parameters)
         }
         loopcounter++;
         /* Delay 100ms taking account of time spent in loop */
-        dly = (100 - (long) (millis() - start)) < 0 ? 0 : (100 - (long) (millis() - start));
+        /* Delay based on LOOP_MS - align with real-time not millis() */
+        /*
+        end = getTimeMS();
+        looptime = (end - start);
+//        dly = ((LOOP_MS - looptime) < 0) ? 0 : (LOOP_MS - looptime);
+//        dly = (LOOP_MS - (long) (millis() - start)) < 0 ? 0 : (LOOP_MS - (long) (millis() - start));
+        if ((LOOP_MS - looptime) < 0)
+            dly = 0;
+        else
+            dly = LOOP_MS - looptime;
+        */
+
+        end = millis();
+        dly = LOOP_MS - (end - start);
+        dly = dly < 0 ? 0 : dly;
+//        Serial.printf("Delay:  %d %d %d %d\n", start, end, looptime, dly);
         delay(dly);
 //        delay(100);
     }
