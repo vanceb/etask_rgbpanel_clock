@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <uptime.h>
 
+
 #define COLOR_VFD       225
 #define COLOR_RED       84
 #define DISPLAY_COLOR   84     // Define a singe colour from the color wheel for the display
@@ -12,13 +13,15 @@
 #define LOOP_MS         40      // 25Hz
 
 #include <etask_rgbpanel_clock.h>
+#include <etask_wifi.h>
+
 #include <Fonts/FreeMonoBold12pt7b.h>
 
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 
 MatrixPanel_I2S_DMA *dma_display = nullptr;
 
-PROGMEM static char days[7][10] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+PROGMEM static char days[7][10] = {"Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"};
 
 // Input a value 0 to 255 to get a color value.
 // The colours are a transition r - g - b - back to r.
@@ -80,97 +83,74 @@ void etask_rgbpanel_clock(void *parameters)
     dma_display->clearScreen();
     dma_display->flipDMABuffer();
 
-    /* Run forever - Required for FreeRTOS task */
-    struct tm timeinfo;
-    unsigned long start = 0;
-    unsigned long end   = 0;
-    unsigned long looptime;
-    unsigned long loopcounter = 0;
-    long dly = 0;
-    uint16_t color = 0xF800;
+    // Declare loop variables outside the loop
+    time_t thetime              = 0;
+    unsigned long start         = 0;
+    unsigned long end           = 0;
+    unsigned long looptime      = 0;
+    unsigned long loopcounter   = 0;
+    long dly                    = 0;
+    uint16_t color              = 0xF800;
 
+
+    /* Run forever - Required for FreeRTOS task */
     for (;;)
     {
         start = millis();
-        getLocalTime( &timeinfo );
+        thetime = UK.toLocal(now());
 
+        // Set up the display for this loop
         dma_display->flipDMABuffer();
         dma_display->clearScreen();
-        // Valid only if year > 2000. 
-        // You can get from timeinfo : tm_year, tm_mon, tm_mday, tm_hour, tm_min, tm_sec
-        if (timeinfo.tm_year > 100 )
-//        if (1)
+
+        // Don't display the time until we have an update from NTP
+        if (year(thetime) > 2020)
         {
-            /*
-            //dma_display->setTextSize(2);     // size 1 == 8 pixels high
-            dma_display->setTextColor(0xF100);
-            dma_display->setFont(&FreeMonoBold12pt7b);     // size 1 == 8 pixels high
-            dma_display->setTextWrap(false); // Don't wrap at end of line - will do ourselves
-            dma_display->setCursor(0, 16);    // start at top left, with 8 pixel of spacing
-            dma_display->printf("%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-            */
 
-            /* Write out the time - place each character to fit display */
-//            dma_display->setTextColor(0xF100);
-            /*
-            dma_display->setTextColor(
-                ((timeinfo.tm_hour & 0xF8) << 8) |
-                ((timeinfo.tm_min  & 0xFA) << 3) |
-                ((timeinfo.tm_sec  & 0xF8))
-            );
-*/
-
-            /* Flashing colon */
-
-//            uint8_t sawtooth = start % 2000 < 1000 ? (start % 2000) / 4 : (2000 - (start % 2000)) / 4;
 #ifndef DISPLAY_COLOR
             color = colorWheel(loopcounter%256);
 #else
             color = colorWheel(DISPLAY_COLOR);
 #endif
-            dma_display->setFont(&FreeMonoBold12pt7b);
             dma_display->setTextColor(color);
-            if ((timeinfo.tm_sec % 2) == 0) {
+            dma_display->setFont(&FreeMonoBold12pt7b);
+            dma_display->setTextSize(1);     // size 1 == 8 pixels high
+            dma_display->setTextWrap(false); // Don't wrap at end of line - will do ourselves
+
+            // Flash the central colon every second
+            if ((second(thetime) % 2) == 0) {
                 dma_display->setCursor(26, 16);
                 dma_display->print(":");
             }
 
-
-#ifndef DISPLAY_COLOR
-            color = colorWheel(loopcounter%256);
-#else
-            color = colorWheel(DISPLAY_COLOR);
-#endif
-            dma_display->setTextColor(color);
-
-            /* Hours and Minutes */
-            dma_display->setTextWrap(false); // Don't wrap at end of line - will do ourselves
+            // Hours and Minutes
             dma_display->setCursor(2, 16);
-            dma_display->print(timeinfo.tm_hour / 10);
+            dma_display->print(hour(thetime) / 10);
             dma_display->setCursor(15, 16);
-            dma_display->print(timeinfo.tm_hour % 10);
+            dma_display->print(hour(thetime) % 10);
             dma_display->setCursor(35, 16);
-            dma_display->print(timeinfo.tm_min / 10);
+            dma_display->print(minute(thetime) / 10);
             dma_display->setCursor(48, 16);
-            dma_display->print(timeinfo.tm_min % 10);
-            dma_display->setTextColor(color);
+            dma_display->print(minute(thetime) % 10);
 
 #ifdef SECONDS_BAR
             /* Seconds Bar */
-            dma_display->drawRect(2, 19, timeinfo.tm_sec+1, 2, color);
+            dma_display->drawRect(2, 19, second(thetime) + 1, 2, color);
             for (int i = 0; i <= 13; i++)
                 dma_display->drawPixel(2+i*5, 20, color);
             for (int i=0; i<=5; i++)
                 dma_display->drawPixel(2+i*15, 21, color);
 #endif
+
 #ifdef SHOW_DAY
-            dma_display->setFont();
+            dma_display->setFont();         // Reset to default font (8x6)
             dma_display->setTextSize(1);     // size 1 == 8 pixels high
-            uint8_t txt_len = 6 * strlen(days[timeinfo.tm_wday]);
+            uint8_t txt_len = 6 * strlen(days[weekday(thetime)]);
             uint8_t start_x = (dma_display->width() - txt_len) < 0 ? 0 : (dma_display->width() - txt_len) / 2;
             dma_display->setCursor(start_x, 23);
-            dma_display->print(days[timeinfo.tm_wday]);
+            dma_display->print(days[weekday(thetime)]);
 #endif
+
 #ifdef SHOW_UPTIME
             /* Uptime */
             dma_display->setFont();
@@ -194,39 +174,24 @@ void etask_rgbpanel_clock(void *parameters)
                     uptime::getSeconds()
             );
 #endif
-#ifdef SHOW_COLOR
-            dma_display->setFont();
-            dma_display->setTextSize(1);     // size 1 == 8 pixels high
-            dma_display->setCursor(24, 22);
-            dma_display->printf("%03d", loopcounter % 256);
-#endif
+
         } else {
+            // We don't have a good NTP time yet, so show wifi status
+            dma_display->setFont();         // Reset to default font (8x6)
             dma_display->setTextSize(1);     // size 1 == 8 pixels high
             dma_display->setTextWrap(false); // Don't wrap at end of line - will do ourselves
             dma_display->setCursor(0, 0);    // start at top left, with 8 pixel of spacing
-            dma_display->printf("Wifi: %s", WiFi.status() == WL_CONNECTED ? "OK" : "Wait");
+            dma_display->printf("Wifi %s", WiFi.status() == WL_CONNECTED ? "OK" : "Init");
 //            dma_display->setCursor(0, 9);
 //            dma_display->printf(WiFi.localIP().toString().c_str());
         }
-        loopcounter++;
-        /* Delay 100ms taking account of time spent in loop */
-        /* Delay based on LOOP_MS - align with real-time not millis() */
-        /*
-        end = getTimeMS();
-        looptime = (end - start);
-//        dly = ((LOOP_MS - looptime) < 0) ? 0 : (LOOP_MS - looptime);
-//        dly = (LOOP_MS - (long) (millis() - start)) < 0 ? 0 : (LOOP_MS - (long) (millis() - start));
-        if ((LOOP_MS - looptime) < 0)
-            dly = 0;
-        else
-            dly = LOOP_MS - looptime;
-        */
 
+        // End the loop with an appropriate delay to meet the desired refresh rate
+        loopcounter++;
         end = millis();
-        dly = LOOP_MS - (end - start);
+        looptime = end - start;
+        dly = LOOP_MS - looptime;
         dly = dly < 0 ? 0 : dly;
-//        Serial.printf("Delay:  %d %d %d %d\n", start, end, looptime, dly);
         delay(dly);
-//        delay(100);
     }
 }
