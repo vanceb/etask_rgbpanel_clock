@@ -21,7 +21,7 @@
 
 MatrixPanel_I2S_DMA *dma_display = nullptr;
 
-PROGMEM static char days[7][10] = {"Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"};
+PROGMEM static char days[7][10] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
 // Input a value 0 to 255 to get a color value.
 // The colours are a transition r - g - b - back to r.
@@ -145,10 +145,10 @@ void etask_rgbpanel_clock(void *parameters)
 #ifdef SHOW_DAY
             dma_display->setFont();         // Reset to default font (8x6)
             dma_display->setTextSize(1);     // size 1 == 8 pixels high
-            uint8_t txt_len = 6 * strlen(days[weekday(thetime)]);
+            uint8_t txt_len = 6 * strlen(days[weekday(thetime)-1]);
             uint8_t start_x = (dma_display->width() - txt_len) < 0 ? 0 : (dma_display->width() - txt_len) / 2;
             dma_display->setCursor(start_x, 23);
-            dma_display->print(days[weekday(thetime)]);
+            dma_display->print(days[weekday(thetime)-1]);
 #endif
 
 #ifdef SHOW_UPTIME
